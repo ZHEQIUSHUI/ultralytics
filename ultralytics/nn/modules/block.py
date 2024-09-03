@@ -427,7 +427,12 @@ class MaxSigmoidAttnBlock(nn.Module):
         embed = self.ec(x) if self.ec is not None else x
         embed = embed.view(bs, self.nh, self.hc, h, w)
 
-        aw = torch.einsum("bmchw,bnmc->bmhwn", embed, guide)
+        # aw = torch.einsum("bmchw,bnmc->bmhwn", embed, guide)
+        guide_permuted = guide.permute(0, 2, 3, 1)
+        embed_permuted = embed.permute(0, 1, 3, 4, 2)
+        shape = embed_permuted.shape
+        embed_permuted = embed_permuted.reshape(shape[0], shape[1], -1, shape[-1])
+        aw = torch.matmul(embed_permuted, guide_permuted).reshape(*shape[:4], -1)
         aw = aw.max(dim=-1)[0]
         aw = aw / (self.hc**0.5)
         aw = aw + self.bias[None, :, None, None]
@@ -503,11 +508,16 @@ class ImagePoolingAttn(nn.Module):
         k = k.reshape(bs, -1, self.nh, self.hc)
         v = v.reshape(bs, -1, self.nh, self.hc)
 
-        aw = torch.einsum("bnmc,bkmc->bmnk", q, k)
+        # aw = torch.einsum("bnmc,bkmc->bmnk", q, k)
+        q_transposed = q.permute(0, 2, 3, 1) 
+        k_transposed = k.permute(0, 2, 3, 1) 
+        aw = torch.matmul(q_transposed.transpose(-2, -1), k_transposed) 
         aw = aw / (self.hc**0.5)
         aw = F.softmax(aw, dim=-1)
 
-        x = torch.einsum("bmnk,bkmc->bnmc", aw, v)
+        # x = torch.einsum("bmnk,bkmc->bnmc", aw, v)
+        v_permuted = v.permute(0, 2, 1, 3)   
+        x = torch.matmul(aw, v_permuted).permute(0, 2, 1, 3)
         x = self.proj(x.reshape(bs, -1, self.ec))
         return x * self.scale + text
 
@@ -526,7 +536,11 @@ class ContrastiveHead(nn.Module):
         """Forward function of contrastive learning."""
         x = F.normalize(x, dim=1, p=2)
         w = F.normalize(w, dim=-1, p=2)
-        x = torch.einsum("bchw,bkc->bkhw", x, w)
+        # x = torch.einsum("bchw,bkc->bkhw", x, w)
+        shape = x.shape
+        x_permuted = x.permute(0, 2, 3, 1).reshape(shape[0], -1, shape[1])
+        w_permuted = w.permute(0, 2, 1)
+        x = torch.matmul(x_permuted, w_permuted).reshape(shape[0], *shape[-2:], -1).permute(0, 3, 1, 2)
         return x * self.logit_scale.exp() + self.bias
 
 
@@ -551,7 +565,11 @@ class BNContrastiveHead(nn.Module):
         """Forward function of contrastive learning."""
         x = self.norm(x)
         w = F.normalize(w, dim=-1, p=2)
-        x = torch.einsum("bchw,bkc->bkhw", x, w)
+        # x = torch.einsum("bchw,bkc->bkhw", x, w)
+        shape = x.shape
+        x_permuted = x.permute(0, 2, 3, 1).reshape(shape[0], -1, shape[1])
+        w_permuted = w.permute(0, 2, 1)
+        x = torch.matmul(x_permuted, w_permuted).reshape(shape[0], *shape[-2:], -1).permute(0, 3, 1, 2)
         return x * self.logit_scale.exp() + self.bias
 
 
